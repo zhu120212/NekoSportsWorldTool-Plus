@@ -54,6 +54,35 @@ Windows x64 可执行文件见 [Releases](https://github.com/Erfan817/NekoSports
 
 两处业务修复均附带单元测试，`cargo test --lib` 135 passed / 0 failed。
 
+**v0.4.2 + auto-road**
+
+- **新增：路网自动获取**
+  上游 v0.4.2 只有 `ui/osm.rs` 的手工导入，路网得自己下载 `.osm` 再选路径。
+  现在补回 `api/school_roads.rs`：登录后取到校园围栏（BD-09，来自 `fence_cache`），
+  转 WGS-84 后向 Overpass 查询 `highway` / `building`，产出可直接喂给
+  `route_planner::load_osm` 的 `.osm` 文件，「路网」页一键搞定。
+
+  细节：
+
+  - 范围键 = 围栏环 + 点位口径 + 学校，1e-7 度量化，范围不变就不重复下载
+  - 缓存 7 天，文件落在 `data_dir()/osm/<key>.osm`，另有 `<key>.osm.json` 记元信息
+  - 端点按 `overpass-api.de` → `z.overpass-api.de` → `kumi.systems` → `private.coffee` 顺序轮换，
+    每个端点遇到 429/5xx 退避 3 秒重试一次（公共实例瞬时过载是常态）
+  - 单端点 HTTP 超时 240 秒。实测（2026-10，北京城区，含建筑）：
+    1 km × 1 km 约 93～107 秒（811 KB），其中服务端查询约 30 秒、回传约 60 秒；
+    只查道路时 32 秒。120 秒会卡在 1 km² 边缘，2 km² 必被截断成半个文件
+    （缺 `</osm>`，随后被 `parse` 判为不完整）
+  - 查询内 `[timeout:25]`：60 会被前置 nginx 直接判成 504
+  - 下载前会打印「范围约 X × Y km」，方便判断还要等多久
+  - UA 用 `NekoSportsWorldTool/<版本> (campus-road-map)`：overpass-api.de 的 nginx 会拦常见爬虫/浏览器 UA 返回 406
+  - 下载后先解析校验，节点/建筑为空视为失败并继续换下一个端点，不留坏文件
+  - 只在这一步单独建 HTTP 客户端：120 秒超时 + 读 `ALL_PROXY` / `HTTPS_PROXY` 环境变量走代理；
+    业务接口仍走原来的 `make_agent()`，不受影响
+  - 路网页有「清除缓存」按钮，强制重新下载
+
+  附带 8 个单元测试（范围键稳定性、缓存命中、过期/缺文件、坐标系往返、XML 解析、
+  空范围报错），`cargo test --lib` 117 passed / 0 failed。
+
 ## 功能
 
 - **跑步**：一键全链（策略 → 打卡点 → 轨迹 → 提交 → OBS → 验证），轨迹按打卡点自然生成，开始时间支持随机或指定到前 3 天；路线颜色可选全绿色或灰绿混合
@@ -72,6 +101,7 @@ Windows x64 可执行文件见 [Releases](https://github.com/Erfan817/NekoSports
 - 人机验证全程本地完成，不依赖任何外部服务
 - 轨迹生成器：打卡点拟合环 + 自然速度曲线 + 哨兵点 / 断崖 / 点位吸附
 - 设备身份持久化（DeviceId / 安装时间 / MAC），稳定不易触发风控
+- 路网自动获取：按学校围栏范围从 Overpass 拉取路网与建筑，本地缓存 7 天
 - GUI 与 CLI 共用同一套协议层，数据文件互通
 
 ## 使用
@@ -110,6 +140,9 @@ NekoSportsWorldTool help                                 # 全部命令
 - **检查更新失败**：更新仅直连 GitHub，网络不通时到 [Release](https://github.com/YanamiNeko/NekoSportsWorldTool/releases) 手动下载
 - **手动更新方式**：Windows 下载新的 `nekosportsworldtool.exe` 后退出软件，用新文件替换旧文件；请保留 `config.json`、`identity.json`、`points_cache.json` 等配置文件，不要删除或修改。
 - **人机验证失败**：自动重试 3 轮，仍失败大概率是网络波动，稍后再试
+- **自动获取路网失败**：先确认已登录并选过学校（否则没有围栏，无法推断范围）；
+  国内直连 Overpass 常被墙，设置 `ALL_PROXY`（例如 `http://127.0.0.1:7890`）后重启程序再试；
+  两个端点都挂就先手工导入 `.osm`
 - **杀软误报**：未签名编译产物可能被误报，自行判断后加白
 
 ## 构建

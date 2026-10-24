@@ -105,6 +105,20 @@ impl App {
                 }
             }
         }
+        // 「自动获取路网」回传 .osm 路径：成功后走与普通导入相同的加载流程
+        while let Ok(res) = self.osm_auto_rx.try_recv() {
+            match res {
+                Ok(path) => {
+                    self.osm_page.path = path.clone();
+                    self.load_osm_async(path);
+                }
+                Err(e) => {
+                    self.osm_page.busy = false;
+                    self.osm_page.status = format!("自动获取路网失败：{e}");
+                    self.log.push(&format!("[road] 自动获取路网失败：{e}"));
+                }
+            }
+        }
         if let Some(ip) = done_ip {
             self.ip = ip;
         }

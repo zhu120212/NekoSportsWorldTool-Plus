@@ -24,6 +24,9 @@ fn ring_to_pts(ring: &[Coord]) -> Vec<(f64, f64)> {
 impl App {
     pub fn draw_osm_page(&mut self, ui: &mut egui::Ui) {
         let mut load_now = false;
+        let mut auto_now = false;
+        let mut auto_refresh = false;
+        let mut clear_now = false;
 
         ui.horizontal(|ui| {
             ui.label("OSM 文件：");
@@ -48,6 +51,28 @@ impl App {
             {
                 load_now = true;
             }
+            // 自动获取：拿已缓存的学校围栏向 Overpass 拉路网，落盘后走同一条加载流程。
+            if ui
+                .add_enabled(!self.osm_page.busy, theme::primary_btn("自动获取路网"))
+                .clicked()
+            {
+                auto_now = true;
+            }
+            if ui
+                .add_enabled(!self.osm_page.busy, egui::Button::new("重新下载"))
+                .on_hover_text("忽略 7 天缓存，重新下载当前区域路网")
+                .clicked()
+            {
+                auto_now = true;
+                auto_refresh = true;
+            }
+            if ui
+                .add_enabled(!self.osm_page.busy, egui::Button::new("清空缓存"))
+                .on_hover_text("删除本目录下已缓存的区域路网，下次会重新下载")
+                .clicked()
+            {
+                clear_now = true;
+            }
         });
 
         // 拖拽导入
@@ -67,6 +92,10 @@ impl App {
 
         if !self.osm_page.status.is_empty() {
             ui.colored_label(theme::plain(), &self.osm_page.status);
+        }
+        let cached = crate::api::school_roads::entries().len();
+        if cached > 0 {
+            ui.label(format!("已缓存 {cached} 个区域路网（7 天内自动复用）"));
         }
 
         // 统计
@@ -155,6 +184,46 @@ impl App {
             let path = self.osm_page.path.clone();
             self.load_osm_async(path);
         }
+        if auto_now {
+            self.fetch_osm_auto(auto_refresh);
+        }
+        if clear_now {
+            let mut n = 0usize;
+            for (key, _, _) in crate::api::school_roads::entries() {
+                if let Err(e) = crate::api::school_roads::clear_cache(&key) {
+                    self.log.push(&format!("[road] 清除缓存失败：{e}"));
+                } else {
+                    n += 1;
+                }
+            }
+            self.osm_page.status = format!("已清空 {n} 个区域路网缓存");
+        }
+    }
+
+    /// 后台下载学校区域路网，拿到 .osm 路径后回传主线程走普通加载流程。
+    ///
+    /// 范围和点位都取本地缓存，不额外发业务请求；下载本身只访问公开的 Overpass。
+    pub fn fetch_osm_auto(&mut self, refresh: bool) {
+        self.osm_page.busy = true;
+        self.osm_page.status = "正在获取学校区域路网…".to_string();
+        let tx = self.osm_auto_tx.clone();
+        let log_tx = self.tx.clone();
+        let fences = crate::api::model::load_fence_cache().unwrap_or_default();
+        let points = self
+            .identity
+            .anchor_coordinate()
+            .ok()
+            .and_then(|a| crate::api::model::load_points_cache_for(a))
+            .map(|(_, pts)| crate::api::points::points_bd(&pts))
+            .unwrap_or_default();
+        std::thread::spawn(move || {
+            let res =
+                crate::api::school_roads::fetch_osm(&fences, &points, refresh, &mut |s| {
+                    let _ = log_tx.send(s.to_string());
+                })
+                .map(|p| p.to_string_lossy().to_string());
+            let _ = tx.send(res);
+        });
     }
 
     /// 后台线程加载 OSM 路网，成功后经 `net_rx` 回传。

@@ -94,6 +94,9 @@ pub struct App {
     pub osm_page: osm::OsmPage,
     net_tx: Sender<Result<Arc<route_planner::RoadGraph>, String>>,
     net_rx: Receiver<Result<Arc<route_planner::RoadGraph>, String>>,
+    /// 「自动获取路网」回传下载到的 .osm 路径（拿到后走与普通导入相同的加载流程）。
+    osm_auto_tx: Sender<Result<String, String>>,
+    osm_auto_rx: Receiver<Result<String, String>>,
 }
 
 impl eframe::App for App {
@@ -313,6 +316,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let (net_tx, net_rx) = std::sync::mpsc::channel();
+        let (osm_auto_tx, osm_auto_rx) = std::sync::mpsc::channel();
         let font_loaded = fonts::install(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx);
         let identity = model::load_identity();
@@ -399,6 +403,8 @@ impl App {
             },
             net_tx,
             net_rx,
+            osm_auto_tx,
+            osm_auto_rx,
         };
         if app.font_loaded.is_none() {
             app.log
